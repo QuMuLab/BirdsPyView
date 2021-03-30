@@ -1,8 +1,10 @@
 import streamlit as st
 from streamlit_drawable_canvas import st_canvas
 import pandas as pd
+import numpy as np
 from helpers import Homography, VoronoiPitch, Play, PitchImage, PitchDraw, get_table_download_link
 from pitch import FootballPitch
+from copy import deepcopy
 
 colors = {'black': '#000000',
           'blue': '#0000ff',
@@ -42,7 +44,7 @@ if uploaded_file:
 
         with col1:
             canvas_image = st_canvas(
-                fill_color = "rgba(255, 165, 0, 0.3)", 
+                fill_color = "rgba(255, 165, 0, 0.3)",
                 stroke_width = 2,
                 stroke_color = '#e00',
                 background_image = image.im,
@@ -53,7 +55,7 @@ if uploaded_file:
             )
 
         with col2:
-            line_seq = ['UP','DP','RPA', 'RG']
+            line_seq = ['U','UP','LG', 'LGA']
             h_line_options = list(pitch.horiz_lines.keys())
             v_line_options = list(pitch.vert_lines.keys())
 
@@ -74,8 +76,9 @@ if uploaded_file:
 
             with lines_expander:
                 st.write('Converted image:')
-                st.image(image.conv_im)
+                st.image(image.conv_im)  # image conversion
 
+            # --------- Marking players ---------- #
             st.title('Players')
             st.write('Draw rectangle over players on image. '+
                      'The player location is assumed to the middle of the base of the rectangle.')
@@ -85,6 +88,7 @@ if uploaded_file:
             with p_col2:
                 team_color = st.selectbox("Team color: ", list(colors.keys()))
                 stroke_color=colors[team_color]
+                auto = st.checkbox('Automatically annotate other players')   # option of automatic annotation
                 edit = st.checkbox('Edit mode (move selection boxes)')
                 update = st.button('Update data')
                 original = True #st.checkbox('Select on original image', value=True)
@@ -99,13 +103,76 @@ if uploaded_file:
                     stroke_color = stroke_color,
                     background_image = image2,
                     drawing_mode = "transform" if edit else "rect",
-                    update_streamlit = update,
+                    update_streamlit= update,
                     height = height2,
                     width = width2,
                     key="canvas2",
                 )
 
             if canvas_converted.json_data is not None:
+
+                # --- test section ---  color comparison
+                # p1 = canvas_converted.json_data["objects"][0]
+                # p2 = canvas_converted.json_data["objects"][1]
+                # pitch_array = np.array(image.im.convert("RGBA"))
+                # box1 = pitch_array[p1['top']:p1['top']+p1['height']+1, p1['left']:p1['left']+p1['width']+1]
+                # box2 = pitch_array[p2['top']:p2['top']+p2['height']+1, p2['left']:p2['left']+p2['width']+1]
+                # #st.image(box1)
+                # #st.image(box2)
+                # m1 = np.mean(box1.reshape(-1,4), 0)
+                # m2 = np.mean(box2.reshape(-1,4), 0)
+                # st.write(m1,m2)
+                # d = np.abs(m1-m2)/m2
+                # st.write(np.abs(m1-m2)/m2)
+                # st.write(d[:-1])
+                # st.write(np.mean(d[:-1]))
+                # --------------------
+
+                # --- test section ---  dropping new boxes
+                # new_box = deepcopy(canvas_converted.json_data["objects"][0])
+                # left = new_box['left']
+                # top = new_box['top']
+                # height = new_box['height']
+                # width = new_box['width']
+                # box = canvas_converted.image_data[top:top+height+2, left:left+width+2]  # new box image data
+                # nbox = box.reshape(-1, 4)
+                # #mean = np.mean(nbox, 0)
+                # #st.write(nbox.shape)
+                # #st.write(mean)
+                # new_box['left'] += 50
+                # new_box['top'] -= 0
+
+                # st.write(canvas_converted.json_data["objects"])
+                # #canvas_converted.image_data[new_box['top']:new_box['top']+2+height, new_box['left']:new_box['left']+2+width] += box  # Drop a new box (ish)
+                # st.write(np.array(image.im.convert("RGBA")).shape)  # pitch image: image.im
+                # st.image(canvas_converted.image_data)
+                # ---------------------
+
+                if auto:
+                    draw = PitchDraw(image, original=True)
+                    p1 = canvas_converted.json_data["objects"][0]  # json_data of the first player annotation
+                    pitch_array = np.array(image.im.convert("RGBA"))  # Pitch image in RGBA array
+                    box1 = pitch_array[p1['top']:p1['top'] + p1['height'] + 1, p1['left']:p1['left'] + p1['width'] + 1]  # Locate the box
+                    m1 = np.mean(box1.reshape(-1, 4), 0)  # Mean RGB value within the box
+
+                    # For every point on the image                       p1: player marked by the user
+                    for y in range(0, image.im.height - p1['height']):
+                        for x in range(0, image.im.width - p1['width']):
+                            small_box = pitch_array[y:y+p1['height']+1, x:x+p1['width']+1]  # Comparing a smaller area. Future may add sensitivity
+                            mean_color = np.mean(small_box.reshape(-1,4), 0)
+                            diff = np.abs(mean_color-m1)/m1
+                            if np.mean(diff[:-1]) < 0.1:
+                                # --- Draw a new box --- #
+                                # Using a customized function draw_rect(), which may need more improvements
+                                draw.draw_rect(y, x, p1['height'], p1['width'], 'rgb(255, 165, 0)',p1['stroke'])  # Drop a new box
+
+                                # canvas_converted.json_data["objects"].append(new_box)  # add new box info to JSON data ( --- In Construction --- )
+
+                    st.image(draw.compose_image())
+
+
+
+
                 if len(canvas_converted.json_data["objects"])>0:
                     dfCoords = pd.json_normalize(canvas_converted.json_data["objects"])
                     if original:
@@ -123,6 +190,8 @@ if uploaded_file:
                     st.write('Player Coordinates:')
                     st.dataframe(dfCoords[['team', 'x', 'y']])
 
+
+                # --------- Final Output --------- #
                 st.title('Final Output')
                 voronoi = VoronoiPitch(dfCoords)
                 sensitivity = int(st.slider("Sensitivity (decrease if it is drawing over the players; "+
