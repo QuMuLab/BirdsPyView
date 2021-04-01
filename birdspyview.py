@@ -152,21 +152,56 @@ if uploaded_file:
                     draw = PitchDraw(image, original=True)
                     p1 = canvas_converted.json_data["objects"][0]  # json_data of the first player annotation
                     pitch_array = np.array(image.im.convert("RGBA"))  # Pitch image in RGBA array
-                    box1 = pitch_array[p1['top']:p1['top'] + p1['height'] + 1, p1['left']:p1['left'] + p1['width'] + 1]  # Locate the box
+                    # box1 = pitch_array[p1['top']:p1['top'] + p1['height'] + 1, p1['left']:p1['left'] + p1['width'] + 1]  # Locate the box
+                    box1 = pitch_array[p1['top']+3:p1['top'] + p1['height'] - 7, p1['left']+3:p1['left'] + p1['width'] - 5]  # ----------------
                     m1 = np.mean(box1.reshape(-1, 4), 0)  # Mean RGB value within the box
+
+                    p_coord = []
+                    for player in canvas_converted.json_data["objects"]:
+                        coord = {'top':player['top'], 'left':player['left'], 'height':player['height'], 'width':player['width'], 'score':-1}
+                        p_coord.append(coord)
 
                     # For every point on the image                       p1: player marked by the user
                     for y in range(0, image.im.height - p1['height']):
                         for x in range(0, image.im.width - p1['width']):
-                            small_box = pitch_array[y:y+p1['height']+1, x:x+p1['width']+1]  # Comparing a smaller area. Future may add sensitivity
+
+                            # small_box = pitch_array[y:y+p1['height']+1, x:x+p1['width']+1]  # Comparing a smaller area. Future may add sensitivity
+                            small_box = pitch_array[y+3:y + p1['height'] - 7, x+3:x + p1['width'] - 5]  # test for smaller box accuracy --------------------
                             mean_color = np.mean(small_box.reshape(-1,4), 0)
                             diff = np.abs(mean_color-m1)/m1
-                            if np.mean(diff[:-1]) < 0.1:
+                            if np.mean(diff[:-1]) < 0.03:
+
+                                # ---- Reduce repeating boxes ----
+                                score = np.mean(diff[:-1])
+                                overlap = False
+                                replace = False
+                                for coord in p_coord:
+                                    if coord['left'] - coord['width'] < x < coord['left'] + coord['width'] and y < \
+                                            coord['top'] + coord['height']:
+                                        if score < coord['score']:
+                                            coord['left'] = x
+                                            coord['top'] = y
+                                            coord['score'] = score
+                                            replace = True
+                                            break
+                                        overlap = True
+                                        break
+                                if overlap:
+                                    continue
+
+                                if not replace:
+                                    coord = {'top':y, 'left':x, 'height':p1['height'], 'width':p1['width'], 'score':score}
+                                    p_coord.append(coord)
+
                                 # --- Draw a new box --- #
                                 # Using a customized function draw_rect(), which may need more improvements
-                                draw.draw_rect(y, x, p1['height'], p1['width'], 'rgb(255, 165, 0)',p1['stroke'])  # Drop a new box
+                                # draw.draw_rect(y, x, p1['height'], p1['width'], 'rgb(255, 165, 0)',p1['stroke'])  # Drop a new box
 
                                 # canvas_converted.json_data["objects"].append(new_box)  # add new box info to JSON data ( --- In Construction --- )
+
+                    # Annotate the detected players
+                    for coord in p_coord:
+                        draw.draw_rect(coord['top'], coord['left'], p1['height'], p1['width'], 'rgb(255, 165, 0)', p1['stroke'])
 
                     st.image(draw.compose_image())
 
