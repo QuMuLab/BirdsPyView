@@ -69,6 +69,9 @@ if uploaded_file:
         with col3: st.image('pitch.png', width=300)
 
     if canvas_image.json_data is not None:
+
+        # st.write(canvas_image.json_data["objects"])  #---------
+
         n_lines = len(canvas_image.json_data["objects"])
         with col3: st.write(f'You have drawn {n_lines} lines. Use the Undo button to delete lines.')
         if n_lines>=4:
@@ -152,32 +155,35 @@ if uploaded_file:
                     draw = PitchDraw(image, original=True)
                     p1 = canvas_converted.json_data["objects"][0]  # json_data of the first player annotation
                     pitch_array = np.array(image.im.convert("RGBA"))  # Pitch image in RGBA array
-                    # box1 = pitch_array[p1['top']:p1['top'] + p1['height'] + 1, p1['left']:p1['left'] + p1['width'] + 1]  # Locate the box
-                    box1 = pitch_array[p1['top']+3:p1['top'] + p1['height'] - 7, p1['left']+3:p1['left'] + p1['width'] - 5]  # ----------------
-                    m1 = np.mean(box1.reshape(-1, 4), 0)  # Mean RGB value within the box
+                    # Smaller area to reduce background impact    Future may add sensitivity ------
+                    box1 = pitch_array[p1['top']+6:p1['top'] + p1['height'] - 12, p1['left']+3:p1['left'] + p1['width'] - 6]
+                    m1 = np.mean(box1.reshape(-1, 4), 0)  # Mean RGBA value within the box
 
-                    p_coord = []
+                    p_coord = []  # Create a list of players' attributes, including coordinates
                     for player in canvas_converted.json_data["objects"]:
-                        coord = {'top':player['top'], 'left':player['left'], 'height':player['height'], 'width':player['width'], 'score':-1}
+                        coord = {'top':player['top'], 'left':player['left'], 'height':player['height'], 'width':player['width'], 'score':-1, 'stroke':player['stroke']}
                         p_coord.append(coord)
 
-                    # For every point on the image                       p1: player marked by the user
+                    # For every point on the image                       p1: (First) player marked by the user
                     for y in range(0, image.im.height - p1['height']):
                         for x in range(0, image.im.width - p1['width']):
 
-                            # small_box = pitch_array[y:y+p1['height']+1, x:x+p1['width']+1]  # Comparing a smaller area. Future may add sensitivity
-                            small_box = pitch_array[y+3:y + p1['height'] - 7, x+3:x + p1['width'] - 5]  # test for smaller box accuracy --------------------
+                            converted_coord = image.h.apply_to_points(np.array([x+p1['width']*p1['scaleX']/2, y+p1['height']*p1['scaleY']/2]).reshape((-1,2)))
+                            if (converted_coord / image.h.coord_converter <= 0).any() or \
+                                    (converted_coord / image.h.coord_converter >= 100).any():  # If it is outside of the pitch
+                                continue  # Invalid point
+
+                            small_box = pitch_array[y+6:y + p1['height'] - 12, x+4:x + p1['width'] - 6]
                             mean_color = np.mean(small_box.reshape(-1,4), 0)
                             diff = np.abs(mean_color-m1)/m1
-                            if np.mean(diff[:-1]) < 0.03:
-
+                            if (diff[:-1] < 0.06).all():
                                 # ---- Reduce repeating boxes ----
                                 score = np.mean(diff[:-1])
                                 overlap = False
                                 replace = False
                                 for coord in p_coord:
-                                    if coord['left'] - coord['width'] < x < coord['left'] + coord['width'] and y < \
-                                            coord['top'] + coord['height']:
+                                    if coord['left'] - coord['width'] + 4 < x < coord['left'] + coord['width'] - 4 \
+                                            and coord['top'] - coord['height'] + 4 < y < coord['top'] + coord['height'] - 4:
                                         if score < coord['score']:
                                             coord['left'] = x
                                             coord['top'] = y
@@ -189,37 +195,29 @@ if uploaded_file:
                                 if overlap:
                                     continue
 
-                                if not replace:
-                                    coord = {'top':y, 'left':x, 'height':p1['height'], 'width':p1['width'], 'score':score}
+                                if not replace:  # Add a new box
+                                    coord = {'top':y, 'left':x, 'height':p1['height'], 'width':p1['width'], 'score':score, 'stroke':p1['stroke']}
                                     p_coord.append(coord)
-
-                                # --- Draw a new box --- #
-                                # Using a customized function draw_rect(), which may need more improvements
-                                # draw.draw_rect(y, x, p1['height'], p1['width'], 'rgb(255, 165, 0)',p1['stroke'])  # Drop a new box
-
-                                # canvas_converted.json_data["objects"].append(new_box)  # add new box info to JSON data ( --- In Construction --- )
 
                     # Annotate the detected players
                     for coord in p_coord:
-                        draw.draw_rect(coord['top'], coord['left'], p1['height'], p1['width'], 'rgb(255, 165, 0)', p1['stroke'])
+                        draw.draw_rect(coord['top'], coord['left'], coord['height'], coord['width'], 'rgb(255, 165, 0)', coord['stroke'])
 
                     st.image(draw.compose_image())
 
-
-
-
                 if len(canvas_converted.json_data["objects"])>0:
-                    dfCoords = pd.json_normalize(canvas_converted.json_data["objects"])
+                    dfCoords = pd.json_normalize(p_coord)
                     if original:
-                        dfCoords['x'] = (dfCoords['left']+(dfCoords['width']*dfCoords['scaleX'])/2)
-                        dfCoords['y'] = (dfCoords['top']+dfCoords['height']*dfCoords['scaleY'])
+                        dfCoords['x'] = (dfCoords['left']+(dfCoords['width'])/2)
+                        dfCoords['y'] = (dfCoords['top']+dfCoords['height'])
                         dfCoords[['x', 'y']] = image.h.apply_to_points(dfCoords[['x', 'y']].values)
                     else:
-                        dfCoords['x'] = (dfCoords['left']+dfCoords['width']*dfCoords['scaleX'])
-                        dfCoords['y'] = (dfCoords['top']+dfCoords['height']*dfCoords['scaleY'])
+                        dfCoords['x'] = (dfCoords['left']+dfCoords['width'])
+                        dfCoords['y'] = (dfCoords['top']+dfCoords['height'])
                     dfCoords[['x', 'y']] = dfCoords[['x', 'y']]/image.h.coord_converter
                     dfCoords['team'] = dfCoords.apply(lambda x: {code: color for color,code in colors.items()}.get(x['stroke']),
                                                       axis=1)
+                    # st.write(dfCoords)
 
                 with p_col3:
                     st.write('Player Coordinates:')
