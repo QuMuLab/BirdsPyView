@@ -69,9 +69,7 @@ if uploaded_file:
         with col3: st.image('pitch.png', width=300)
 
     if canvas_image.json_data is not None:
-
-        # st.write(canvas_image.json_data["objects"])  #---------
-
+        # st.write(canvas_image.json_data["objects"])
         n_lines = len(canvas_image.json_data["objects"])
         with col3: st.write(f'You have drawn {n_lines} lines. Use the Undo button to delete lines.')
         if n_lines>=4:
@@ -150,40 +148,54 @@ if uploaded_file:
                 # st.write(np.array(image.im.convert("RGBA")).shape)  # pitch image: image.im
                 # st.image(canvas_converted.image_data)
                 # ---------------------
+                p_coord = []  # Create a list of players' attributes, including coordinates
+                for player in canvas_converted.json_data["objects"]:
+                    coord = {'top': player['top'], 'left': player['left'], 'height': player['height'],
+                             'width': player['width'], 'score': -1, 'stroke': player['stroke']}
+                    p_coord.append(coord)
 
                 if auto:
                     draw = PitchDraw(image, original=True)
-                    p1 = canvas_converted.json_data["objects"][0]  # json_data of the first player annotation
                     pitch_array = np.array(image.im.convert("RGBA"))  # Pitch image in RGBA array
-                    # Smaller area to reduce background impact    Future may add sensitivity ------
-                    box1 = pitch_array[p1['top']+6:p1['top'] + p1['height'] - 12, p1['left']+3:p1['left'] + p1['width'] - 6]
+                    p1 = canvas_converted.json_data["objects"][0]  # json_data of the first player annotation
+                    team_2 = False
+                    p2 = {'width':p1['width'],'height':p1['height']}
+                    if len(canvas_converted.json_data["objects"]) > 1:
+                        for player in canvas_converted.json_data["objects"][1:]:
+                            if player['stroke'] is not p1['stroke']:
+                                team_2 = True
+                                p2 = player
+                                break
+
+                    # Smaller area to reduce background impact    (Future may add sensitivity ------
+                    box1 = pitch_array[p1['top']+4:p1['top'] + p1['height'] - 5, p1['left']+3:p1['left'] + p1['width'] - 5]
                     m1 = np.mean(box1.reshape(-1, 4), 0)  # Mean RGBA value within the box
+                    if team_2:  # If second team annotation exists:
+                        box2 = pitch_array[p2['top'] + 4:p2['top'] + p2['height'] - 5,p2['left'] + 3:p2['left'] + p2['width'] - 5]
+                        m2 = np.mean(box2.reshape(-1, 4), 0)
 
-                    p_coord = []  # Create a list of players' attributes, including coordinates
-                    for player in canvas_converted.json_data["objects"]:
-                        coord = {'top':player['top'], 'left':player['left'], 'height':player['height'], 'width':player['width'], 'score':-1, 'stroke':player['stroke']}
-                        p_coord.append(coord)
-
-                    # For every point on the image                       p1: (First) player marked by the user
-                    for y in range(0, image.im.height - p1['height']):
-                        for x in range(0, image.im.width - p1['width']):
-
-                            converted_coord = image.h.apply_to_points(np.array([x+p1['width']*p1['scaleX']/2, y+p1['height']*p1['scaleY']/2]).reshape((-1,2)))
+                    # For every point on the image   |   p1: (First) player marked by the user  p2: Second team player (if applicable)
+                    for y in range(0, image.im.height - max(p1['height'],p2['height'])):
+                        for x in range(0, image.im.width - max(p1['width'],p2['width'])):
+                            mean_height = (p1['height']+p2['height'])//2
+                            mean_width = (p1['width']+p2['width'])//2
+                            converted_coord = image.h.apply_to_points(np.array([x+mean_width/2, y+mean_height/2]).reshape((-1,2)))
                             if (converted_coord / image.h.coord_converter <= 0).any() or \
                                     (converted_coord / image.h.coord_converter >= 100).any():  # If it is outside of the pitch
                                 continue  # Invalid point
 
-                            small_box = pitch_array[y+6:y + p1['height'] - 12, x+4:x + p1['width'] - 6]
+                            small_box = pitch_array[y+4:y + p1['height'] - 6, x+4:x + p1['width'] - 6]
                             mean_color = np.mean(small_box.reshape(-1,4), 0)
-                            diff = np.abs(mean_color-m1)/m1
-                            if (diff[:-1] < 0.06).all():
+                            diff1 = np.abs(mean_color-m1)/m1
+                            if (diff1[:-1] < 0.05).all():  # Possible p1 teammate
                                 # ---- Reduce repeating boxes ----
-                                score = np.mean(diff[:-1])
+                                score = np.mean(diff1[:-1])
                                 overlap = False
                                 replace = False
                                 for coord in p_coord:
-                                    if coord['left'] - coord['width'] + 4 < x < coord['left'] + coord['width'] - 4 \
-                                            and coord['top'] - coord['height'] + 4 < y < coord['top'] + coord['height'] - 4:
+                                    if coord['left'] - coord['width'] + 2 < x < coord['left'] + coord['width'] - 2 \
+                                            and coord['top'] - coord['height'] + 2 < y < coord['top'] + coord['height'] - 2 \
+                                            and coord['stroke'] is p1['stroke']:
                                         if score < coord['score']:
                                             coord['left'] = x
                                             coord['top'] = y
@@ -192,12 +204,43 @@ if uploaded_file:
                                             break
                                         overlap = True
                                         break
+
                                 if overlap:
                                     continue
 
                                 if not replace:  # Add a new box
                                     coord = {'top':y, 'left':x, 'height':p1['height'], 'width':p1['width'], 'score':score, 'stroke':p1['stroke']}
                                     p_coord.append(coord)
+                                    continue
+
+                            if team_2:  # Possible p2 teammate
+                                diff2 = np.abs(mean_color-m2)/m2
+                                if (diff2[:-1] < 0.05).all():
+                                    # ---- Reduce repeating boxes ----
+                                    score = np.mean(diff2[:-1])
+                                    overlap = False
+                                    replace = False
+                                    for coord in p_coord:
+                                        if coord['left'] - coord['width'] + 2 < x < coord['left'] + coord['width'] - 2 \
+                                                and coord['top'] - coord['height'] + 2 < y < coord['top'] + coord[
+                                            'height'] - 2 \
+                                                and coord['stroke'] is p2['stroke']:
+                                            if score < coord['score']:
+                                                coord['left'] = x
+                                                coord['top'] = y
+                                                coord['score'] = score
+                                                replace = True
+                                                break
+                                            overlap = True
+                                            break
+
+                                    if overlap:
+                                        continue
+
+                                    if not replace:  # Add a new box
+                                        coord = {'top': y, 'left': x, 'height': p2['height'], 'width': p2['width'],
+                                                 'score': score, 'stroke': p2['stroke']}
+                                        p_coord.append(coord)
 
                     # Annotate the detected players
                     for coord in p_coord:
@@ -217,7 +260,7 @@ if uploaded_file:
                     dfCoords[['x', 'y']] = dfCoords[['x', 'y']]/image.h.coord_converter
                     dfCoords['team'] = dfCoords.apply(lambda x: {code: color for color,code in colors.items()}.get(x['stroke']),
                                                       axis=1)
-                    # st.write(dfCoords)
+                    # st.write(dfCoords)  # ----------------------------------
 
                 with p_col3:
                     st.write('Player Coordinates:')
